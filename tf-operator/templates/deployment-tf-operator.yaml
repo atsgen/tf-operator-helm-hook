@@ -1,0 +1,240 @@
+{{- $envAll := . }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tf-operator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tf-operator
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - endpoints
+  - events
+  - namespaces
+  - nodes
+  - persistentvolumeclaims
+  - pods
+  - secrets
+  - serviceaccounts
+  - services
+  - services/finalizers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - extensions
+  resources:
+  - ingresses
+  - networkpolicies
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - networkpolicies
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+# used to create network-attachment-definitions.k8s.cni.cncf.io
+- apiGroups:
+  - apiextensions.k8s.io
+  resources:
+  - customresourcedefinitions
+  verbs:
+  - create
+  - get
+- apiGroups:
+  - k8s.cni.cncf.io
+  resources:
+  - network-attachment-definitions
+  verbs:
+  - '*'
+# used to give privileged access to datapath components
+- apiGroups: ["security.openshift.io"]
+  resources:
+  - securitycontextconstraints
+  verbs:
+  - use
+  resourceNames:
+  - privileged
+- apiGroups: ["config.openshift.io"]
+  resources:
+  - networks
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups: ["operator.openshift.io"]
+  resources:
+  - networks
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups: [""]
+  resources:
+  - networks
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - clusterrolebindings
+  - clusterroles
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  - daemonsets
+  - replicasets
+  - statefulsets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - monitoring.coreos.com
+  resources:
+  - servicemonitors
+  verbs:
+  - get
+  - create
+- apiGroups:
+  - apps
+  resourceNames:
+  - tf-operator
+  resources:
+  - deployments/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - tungsten.atsgen.com
+  resources:
+  - '*'
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: tf-operator
+subjects:
+- kind: ServiceAccount
+  name: tf-operator
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: tf-operator
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tf-operator
+  labels:
+{{ tuple $envAll "tungsten-fabric" "tf-operator" | include "helm-toolkit.snippets.kubernetes_metadata_labels" | indent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      name: tf-operator
+{{ tuple $envAll "tungsten-fabric" "tf-operator" | include "helm-toolkit.snippets.kubernetes_metadata_labels" | indent 6 }}
+  template:
+    metadata:
+      labels:
+        name: tf-operator
+{{ tuple $envAll "tungsten-fabric" "tf-operator" | include "helm-toolkit.snippets.kubernetes_metadata_labels" | indent 8 }}
+    spec:
+      hostNetwork: true
+      serviceAccountName: tf-operator
+      containers:
+        - name: tf-operator
+          image: {{ .Values.images.tf_operator }}
+          command:
+          - tf-operator
+          imagePullPolicy: {{ .Values.images.imagePullPolicy }}
+          env:
+            - name: WATCH_NAMESPACE
+              value: ""
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: OPERATOR_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: OPERATOR_NAME
+              value: "tf-operator"
+            - name: CONTAINER_PREFIX
+              value: "tungsten"
+            - name: CONTAINER_REGISTRY
+              value: "tungstenops"
+      tolerations:
+      - key: node-role.kubernetes.io/master
+        operator: Exists
+        effect: NoSchedule
+      - key: node.kubernetes.io/not-ready
+        operator: Exists
+        effect: NoSchedule
+---
+apiVersion: tungsten.atsgen.com/v1alpha1
+kind: SDN
+metadata:
+  name: default
+spec:
+  cniConfig:
+    clusterName: {{ .Values.clusterName }}
+    ipFabricNetwork:
+      cidr: {{ .Values.networking.ipFabricSubnet }}
+    podNetwork:
+      cidr: {{ .Values.networking.podSubnet }}
+    serviceNetwork:
+      cidr: {{ .Values.networking.serviceSubnet }}
+    ipForwarding: {{ .Values.networking.ipForwarding }}
+    useHostNewtorkService: {{ .Values.networking.useHostNewtorkService }}
+  adminSecretRef:
+    name: tungsten-auth
+  datapathConfig:
+    useVrouter: true
+---
